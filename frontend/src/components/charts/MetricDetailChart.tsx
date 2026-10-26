@@ -14,12 +14,19 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { Activity, LucideIcon } from "lucide-react";
+import { Activity, LucideIcon, Info, AlertCircle, CheckCircle2, Calculator } from "lucide-react";
 
 export interface DataPoint {
   date: string;
   value: number | null | undefined;
   [key: string]: any;
+}
+
+export interface MetricProvenance {
+  source: string; // "Garmin API" | "Calculated" | "Unavailable"
+  status?: "verified" | "calculated" | "unavailable";
+  reason?: string;
+  unit?: string;
 }
 
 interface MetricDetailChartProps {
@@ -35,7 +42,12 @@ interface MetricDetailChartProps {
   yAxisDomain?: [number | "auto" | "dataMin", number | "auto" | "dataMax"];
   icon?: LucideIcon;
   badge?: string;
-  badgeVariant?: "default" | "success" | "warning" | "destructive";
+  badgeVariant?: "default" | "success" | "warning" | "destructive" | "unavailable";
+  provenance?: MetricProvenance;
+  isUnavailable?: boolean;
+  unavailableReason?: string;
+  isPace?: boolean;
+  formatValue?: (val: any) => string;
 }
 
 const COLOR_MAP: Record<string, { stroke: string; fill: string }> = {
@@ -61,14 +73,23 @@ export function MetricDetailChart({
   yAxisDomain = ["auto", "auto"],
   icon: Icon = Activity,
   badge,
-  badgeVariant = "default",
+  badgeVariant,
+  provenance,
+  isUnavailable = false,
+  unavailableReason,
+  isPace = false,
+  formatValue,
 }: MetricDetailChartProps) {
   const colorConfig = COLOR_MAP[color] || { stroke: color, fill: color };
 
-  const validData = data.filter((d) => d[dataKey] !== null && d[dataKey] !== undefined);
-  const hasData = validData.length > 0;
+  const effectiveUnavailable = isUnavailable || provenance?.status === "unavailable";
+  const effectiveReason =
+    unavailableReason || provenance?.reason || "Metric unavailable from current sensor setup";
 
-  // Format date helper
+  const validData = data.filter((d) => d[dataKey] !== null && d[dataKey] !== undefined);
+  const hasData = validData.length > 0 && !effectiveUnavailable;
+
+  // Format date helper for X-axis
   const formatXAxis = (tick: string) => {
     if (!tick) return "";
     if (tick.includes("-")) {
@@ -76,21 +97,83 @@ export function MetricDetailChart({
       if (parts.length >= 3) {
         return `${parts[1]}/${parts[2]}`;
       }
+      if (parts.length === 2) {
+        return tick;
+      }
     }
     return tick;
   };
 
-  const getBadgeClasses = (variant: string) => {
-    switch (variant) {
-      case "success":
-        return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-      case "warning":
-        return "bg-amber-500/10 text-amber-400 border-amber-500/20";
-      case "destructive":
-        return "bg-rose-500/10 text-rose-400 border-rose-500/20";
-      default:
-        return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+  // Format seconds to mm:ss for pace
+  const formatSecondsToPace = (sec: number) => {
+    if (!sec || isNaN(sec)) return "—";
+    const mins = Math.floor(sec / 60);
+    const remainder = Math.round(sec % 60);
+    return `${mins}:${remainder.toString().padStart(2, "0")}`;
+  };
+
+  const formatTooltipValue = (val: any) => {
+    if (formatValue) return formatValue(val);
+    if (isPace && typeof val === "number") {
+      return `${formatSecondsToPace(val)} /km`;
     }
+    return `${val} ${unit}`.trim();
+  };
+
+  const formatYAxisTick = (val: any) => {
+    if (isPace && typeof val === "number") {
+      return formatSecondsToPace(val);
+    }
+    return val;
+  };
+
+  // Determine provenance badge details
+  const renderProvenanceBadge = () => {
+    if (provenance) {
+      if (provenance.status === "unavailable") {
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded-full border font-medium bg-gray-800/80 text-gray-400 border-gray-700 flex items-center gap-1">
+            <AlertCircle className="w-3 h-3 text-gray-400" />
+            Unavailable
+          </span>
+        );
+      }
+      if (provenance.status === "calculated") {
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded-full border font-medium bg-amber-500/10 text-amber-400 border-amber-500/20 flex items-center gap-1">
+            <Calculator className="w-3 h-3 text-amber-400" />
+            {provenance.source}
+          </span>
+        );
+      }
+      return (
+        <span className="text-[10px] px-2 py-0.5 rounded-full border font-medium bg-cyan-500/10 text-cyan-400 border-cyan-500/20 flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3 text-cyan-400" />
+          {provenance.source}
+        </span>
+      );
+    }
+
+    if (badge) {
+      const variantClass =
+        badgeVariant === "success"
+          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+          : badgeVariant === "warning"
+          ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+          : badgeVariant === "destructive"
+          ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+          : badgeVariant === "unavailable"
+          ? "bg-gray-800 text-gray-400 border-gray-700"
+          : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+
+      return (
+        <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${variantClass}`}>
+          {badge}
+        </span>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -111,15 +194,7 @@ export function MetricDetailChart({
             </div>
             <h3 className="text-sm font-semibold text-gray-200">{title}</h3>
           </div>
-          {badge && (
-            <span
-              className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${getBadgeClasses(
-                badgeVariant
-              )}`}
-            >
-              {badge}
-            </span>
-          )}
+          {renderProvenanceBadge()}
         </div>
 
         {description && (
@@ -127,25 +202,41 @@ export function MetricDetailChart({
         )}
 
         <div className="flex items-baseline gap-1.5 mt-2 mb-3">
-          <span className="text-2xl font-bold tracking-tight text-white">
-            {currentValue !== undefined && currentValue !== null ? currentValue : "—"}
-          </span>
-          {unit && <span className="text-xs text-gray-400 font-medium">{unit}</span>}
+          {effectiveUnavailable ? (
+            <span className="text-xl font-bold tracking-tight text-gray-400">Unavailable</span>
+          ) : (
+            <>
+              <span className="text-2xl font-bold tracking-tight text-white">
+                {currentValue !== undefined && currentValue !== null ? currentValue : "—"}
+              </span>
+              {unit && <span className="text-xs text-gray-400 font-medium">{unit}</span>}
+            </>
+          )}
         </div>
       </div>
 
       {/* Chart visualization */}
       <div className="w-full relative mt-1" style={{ height }}>
-        {!hasData ? (
-          <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-gray-800/80 rounded-lg text-gray-500 text-xs gap-1 bg-gray-900/30">
-            <span>No data recorded for this metric</span>
+        {effectiveUnavailable ? (
+          <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-gray-800 rounded-lg p-3 text-center bg-gray-900/40">
+            <div className="w-8 h-8 rounded-full bg-gray-800/80 flex items-center justify-center text-gray-400 mb-2">
+              <Info className="w-4 h-4" />
+            </div>
+            <p className="text-xs font-medium text-gray-300">Requires External Sensor</p>
+            <p className="text-[11px] text-gray-400 mt-1 max-w-[240px] leading-snug">
+              {effectiveReason}
+            </p>
+          </div>
+        ) : !hasData ? (
+          <div className="w-full h-full flex flex-col items-center justify-center border border-dashed border-gray-800/80 rounded-lg text-gray-400 text-xs gap-1 bg-gray-900/30">
+            <span>No activity data recorded in period</span>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             {type === "area" ? (
-              <AreaChart data={data} margin={{ top: 8, right: 6, left: -24, bottom: 0 }}>
+              <AreaChart data={data} margin={{ top: 8, right: 6, left: isPace ? -10 : -24, bottom: 0 }}>
                 <defs>
-                  <linearGradient id={`grad-${title}`} x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id={`grad-${title.replace(/\s+/g, "-")}`} x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={colorConfig.stroke} stopOpacity={0.4} />
                     <stop offset="95%" stopColor={colorConfig.stroke} stopOpacity={0.0} />
                   </linearGradient>
@@ -161,6 +252,8 @@ export function MetricDetailChart({
                 />
                 <YAxis
                   domain={yAxisDomain}
+                  reversed={isPace}
+                  tickFormatter={formatYAxisTick}
                   stroke="#4b5563"
                   fontSize={10}
                   tickLine={false}
@@ -174,7 +267,7 @@ export function MetricDetailChart({
                     fontSize: "12px",
                     color: "#f3f4f6",
                   }}
-                  formatter={(val: any) => [`${val} ${unit}`, title]}
+                  formatter={(val: any) => [formatTooltipValue(val), title]}
                   labelFormatter={(lbl) => `Date: ${lbl}`}
                 />
                 <Area
@@ -183,11 +276,11 @@ export function MetricDetailChart({
                   stroke={colorConfig.stroke}
                   strokeWidth={2}
                   fillOpacity={1}
-                  fill={`url(#grad-${title})`}
+                  fill={`url(#grad-${title.replace(/\s+/g, "-")})`}
                 />
               </AreaChart>
             ) : type === "bar" ? (
-              <BarChart data={data} margin={{ top: 8, right: 6, left: -24, bottom: 0 }}>
+              <BarChart data={data} margin={{ top: 8, right: 6, left: isPace ? -10 : -24, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -199,6 +292,8 @@ export function MetricDetailChart({
                 />
                 <YAxis
                   domain={yAxisDomain}
+                  reversed={isPace}
+                  tickFormatter={formatYAxisTick}
                   stroke="#4b5563"
                   fontSize={10}
                   tickLine={false}
@@ -212,13 +307,13 @@ export function MetricDetailChart({
                     fontSize: "12px",
                     color: "#f3f4f6",
                   }}
-                  formatter={(val: any) => [`${val} ${unit}`, title]}
+                  formatter={(val: any) => [formatTooltipValue(val), title]}
                   labelFormatter={(lbl) => `Date: ${lbl}`}
                 />
                 <Bar dataKey={dataKey} fill={colorConfig.stroke} radius={[4, 4, 0, 0]} />
               </BarChart>
             ) : (
-              <LineChart data={data} margin={{ top: 8, right: 6, left: -24, bottom: 0 }}>
+              <LineChart data={data} margin={{ top: 8, right: 6, left: isPace ? -10 : -24, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -230,6 +325,8 @@ export function MetricDetailChart({
                 />
                 <YAxis
                   domain={yAxisDomain}
+                  reversed={isPace}
+                  tickFormatter={formatYAxisTick}
                   stroke="#4b5563"
                   fontSize={10}
                   tickLine={false}
@@ -243,7 +340,7 @@ export function MetricDetailChart({
                     fontSize: "12px",
                     color: "#f3f4f6",
                   }}
-                  formatter={(val: any) => [`${val} ${unit}`, title]}
+                  formatter={(val: any) => [formatTooltipValue(val), title]}
                   labelFormatter={(lbl) => `Date: ${lbl}`}
                 />
                 <Line
@@ -251,7 +348,8 @@ export function MetricDetailChart({
                   dataKey={dataKey}
                   stroke={colorConfig.stroke}
                   strokeWidth={2}
-                  dot={{ r: 2, fill: colorConfig.stroke }}
+                  dot={{ r: 3, fill: colorConfig.stroke }}
+                  connectNulls={true}
                 />
               </LineChart>
             )}

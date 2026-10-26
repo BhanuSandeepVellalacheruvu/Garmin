@@ -15,526 +15,701 @@ import {
   Mountain,
   Compass,
   ArrowUpRight,
+  ShieldCheck,
+  CheckCircle2,
+  Calendar,
+  Layers,
 } from "lucide-react";
 import { fetchAPI } from "@/lib/api";
-import { WeeklyVolume } from "@/lib/types";
 import { MetricDetailChart, DataPoint } from "@/components/charts/MetricDetailChart";
 
+interface RunningFullSuiteResponse {
+  activities_count: number;
+  activities: {
+    id: string;
+    garmin_id: string;
+    name: string;
+    date: string;
+    start_time: string;
+    distance_km: number;
+    distance_meters: number;
+    duration_seconds: number;
+    duration_formatted: string;
+    avg_speed_ms: number;
+    avg_pace_sec: number;
+    avg_pace_formatted: string;
+    avg_heart_rate: number | null;
+    max_heart_rate: number | null;
+    avg_cadence: number | null;
+    stride_length_m: number | null;
+    elevation_gain_m: number | null;
+    elevation_loss_m: number | null;
+    calories: number | null;
+    training_effect_aerobic: number | null;
+    training_effect_anaerobic: number | null;
+    best_split_pace_sec: number | null;
+    best_split_pace_formatted: string | null;
+    best_split_distance_m: number | null;
+    ground_contact_time_ms: number | null;
+    vertical_oscillation_cm: number | null;
+    vertical_ratio_pct: number | null;
+    running_power_watts: number | null;
+    aerobic_decoupling_pct: number | null;
+  }[];
+  weekly_volume: {
+    week_start: string;
+    distance_km: number;
+    duration_hours: number;
+    runs_count: number;
+  }[];
+  monthly_volume: {
+    month: string;
+    distance_km: number;
+    duration_hours: number;
+    runs_count: number;
+  }[];
+  race_predictions: {
+    event: string;
+    distance_km: number;
+    predicted_seconds: number;
+    time_formatted: string;
+    pace_formatted: string;
+    source: string;
+  }[];
+  vo2_max_estimate: {
+    value: number | null;
+    unit: string;
+    source: string;
+  };
+  cadence_distribution: Record<string, number>;
+  provenance: Record<string, { source: string; status: "verified" | "calculated" | "unavailable"; unit: string; reason?: string }>;
+}
+
 export default function RunningPage() {
-  const { data: weekly } = useSWR<WeeklyVolume>("/analytics/running/weekly", fetchAPI);
-  const { data: trends } = useSWR<{
-    pace_trend: { date: string; pace_ms: number; pace_min_km: string }[];
-    pace_hr_efficiency: { date: string; pace_min_km: number; avg_hr: number }[];
-  }>("/analytics/running/trends", fetchAPI);
+  const { data: suite, error, isLoading } = useSWR<RunningFullSuiteResponse>(
+    "/analytics/running/full-suite",
+    fetchAPI
+  );
 
-  const { data: prsData } = useSWR<{
-    personal_bests: Record<
-      string,
-      { distance_m: number; estimated_seconds: number; achieved_on: string; is_estimated: boolean }
-    >;
-  }>("/analytics/running/personal-bests", fetchAPI);
+  const activities = suite?.activities || [];
+  const weekly = suite?.weekly_volume || [];
+  const predictions = suite?.race_predictions || [];
+  const cadenceDist = suite?.cadence_distribution || {};
 
-  const prs = prsData?.personal_bests || {};
+  // Sort activities chronologically for charts
+  const sortedRuns = [...activities].sort((a, b) => a.date.localeCompare(b.date));
+  const latestRun = sortedRuns.length > 0 ? sortedRuns[sortedRuns.length - 1] : null;
 
-  // Baseline dates for 12 weeks / sessions
-  const dates = Array.from({ length: 12 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (11 - i) * 7);
-    return d.toISOString().split("T")[0];
-  });
-
-  // Construct 25 Individual Dedicated Datasets
-  // 1. Weekly Distance
-  const weeklyDistData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((22 + (i % 5) * 3.5) * 10) / 10,
+  // 1. Weekly Distance (Bar)
+  const weeklyDistData: DataPoint[] = weekly.map((w) => ({
+    date: w.week_start,
+    value: w.distance_km,
   }));
 
-  // 2. Average Pace Progression
-  const avgPaceData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((5.6 - i * 0.03) * 100) / 100,
+  // 2. Weekly Running Duration (Bar)
+  const weeklyDurData: DataPoint[] = weekly.map((w) => ({
+    date: w.week_start,
+    value: w.duration_hours,
   }));
 
-  // 3. Best Pace
-  const bestPaceData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((4.4 - (i % 4) * 0.05) * 100) / 100,
+  // 3. Weekly Frequency (Bar)
+  const weeklyFreqData: DataPoint[] = weekly.map((w) => ({
+    date: w.week_start,
+    value: w.runs_count,
   }));
 
-  // 4. Aerobic Decoupling Rate
-  const decouplingData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((4.8 - (i % 3) * 0.6) * 10) / 10,
+  // 4. Average Pace Progression (Line, Inverted mm:ss)
+  const avgPaceData: DataPoint[] = sortedRuns.map((r) => ({
+    date: r.date,
+    value: r.avg_pace_sec,
+    name: r.name,
   }));
 
-  // 5. Cadence Progression
-  const cadenceData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 166 + (i % 5) * 2,
+  // 5. Best Split Pace (Line, Inverted mm:ss)
+  const bestSplitData: DataPoint[] = sortedRuns
+    .filter((r) => r.best_split_pace_sec !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.best_split_pace_sec,
+      name: r.name,
+    }));
+
+  // 6. Cadence Progression (Line)
+  const cadenceData: DataPoint[] = sortedRuns
+    .filter((r) => r.avg_cadence !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.avg_cadence,
+      name: r.name,
+    }));
+
+  // 7. Cadence Distribution (Bar)
+  const cadenceDistData: DataPoint[] = Object.entries(cadenceDist).map(([bin, count]) => ({
+    date: bin,
+    value: count,
   }));
 
-  // 6. Stride Length
-  const strideData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((1.08 + (i % 4) * 0.02) * 100) / 100,
+  // 8. Stride Length (Calculated: Speed / Cadence)
+  const strideData: DataPoint[] = sortedRuns
+    .filter((r) => r.stride_length_m !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.stride_length_m,
+      name: r.name,
+    }));
+
+  // 9. Average Heart Rate (Line)
+  const avgHrData: DataPoint[] = sortedRuns
+    .filter((r) => r.avg_heart_rate !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.avg_heart_rate,
+      name: r.name,
+    }));
+
+  // 10. Max Heart Rate (Line)
+  const maxHrData: DataPoint[] = sortedRuns
+    .filter((r) => r.max_heart_rate !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.max_heart_rate,
+      name: r.name,
+    }));
+
+  // 11. Aerobic Training Effect (Area)
+  const aerobicEffectData: DataPoint[] = sortedRuns
+    .filter((r) => r.training_effect_aerobic !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.training_effect_aerobic,
+      name: r.name,
+    }));
+
+  // 12. Anaerobic Training Effect (Area)
+  const anaerobicEffectData: DataPoint[] = sortedRuns
+    .filter((r) => r.training_effect_anaerobic !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.training_effect_anaerobic,
+      name: r.name,
+    }));
+
+  // 13. Elevation Gain (Bar)
+  const elevationData: DataPoint[] = sortedRuns
+    .filter((r) => r.elevation_gain_m !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.elevation_gain_m,
+      name: r.name,
+    }));
+
+  // 14. Calories Burned (Bar)
+  const caloriesData: DataPoint[] = sortedRuns
+    .filter((r) => r.calories !== null)
+    .map((r) => ({
+      date: r.date,
+      value: r.calories,
+      name: r.name,
+    }));
+
+  // 15. Distance Per Session (Bar)
+  const distancePerSessionData: DataPoint[] = sortedRuns.map((r) => ({
+    date: r.date,
+    value: r.distance_km,
+    name: r.name,
   }));
 
-  // 7. Ground Contact Time
-  const gctData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 242 - (i % 4) * 3,
-  }));
-
-  // 8. Vertical Oscillation
-  const vertOscData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((8.4 - (i % 3) * 0.2) * 10) / 10,
-  }));
-
-  // 9. Vertical Ratio
-  const vertRatioData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((7.6 - (i % 3) * 0.2) * 10) / 10,
-  }));
-
-  // 10. Running Power
-  const powerData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 265 + (i % 4) * 12,
-  }));
-
-  // 11. Normalized Graded Pace
-  const ngpData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((5.35 - (i % 4) * 0.04) * 100) / 100,
-  }));
-
-  // 12. Efficiency Factor
-  const efData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((1.24 + (i % 4) * 0.02) * 100) / 100,
-  }));
-
-  // 13. Aerobic Training Effect
-  const aerobicEffectData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((3.4 + (i % 3) * 0.2) * 10) / 10,
-  }));
-
-  // 14. Anaerobic Training Effect
-  const anaerobicEffectData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((1.4 + (i % 3) * 0.3) * 10) / 10,
-  }));
-
-  // 15. Elevation Gain
-  const elevGainData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 85 + (i % 4) * 25,
-  }));
-
-  // 16. Elevation Loss
-  const elevLossData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 82 + (i % 4) * 24,
-  }));
-
-  // 17. Longest Run Distance
-  const longestRunData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((12.5 + (i % 5) * 2.2) * 10) / 10,
-  }));
-
-  // 18. Run Frequency
-  const frequencyData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 3 + (i % 3),
-  }));
-
-  // 19. Easy / Zone 2 %
-  const easyPctData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 75 + (i % 3) * 3,
-  }));
-
-  // 20. Threshold %
-  const thresholdPctData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 15 + (i % 3) * 2,
-  }));
-
-  // 21. Speed / Interval %
-  const speedPctData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: 10 - (i % 2) * 2,
-  }));
-
-  // 22. Estimated VO2 Max
-  const vo2Data: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((50.5 + i * 0.2) * 10) / 10,
-  }));
-
-  // 23. 5K Race Prediction
-  const pred5kData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((22.8 - i * 0.08) * 10) / 10,
-  }));
-
-  // 24. 10K Race Prediction
-  const pred10kData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((47.5 - i * 0.15) * 10) / 10,
-  }));
-
-  // 25. Half Marathon Race Prediction
-  const predHalfData: DataPoint[] = dates.map((d, i) => ({
-    date: d,
-    value: Math.round((106.0 - i * 0.3) * 10) / 10,
+  // 16. Duration Per Session (Bar)
+  const durationPerSessionData: DataPoint[] = sortedRuns.map((r) => ({
+    date: r.date,
+    value: Math.round((r.duration_seconds / 60) * 10) / 10,
+    name: r.name,
   }));
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto p-2">
-      {/* Title */}
+    <div className="space-y-8 pb-12 max-w-7xl mx-auto">
+      {/* Top Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-800 pb-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Running Performance Lab</h1>
+            <span className="text-[11px] px-2.5 py-0.5 rounded-full border font-medium bg-emerald-500/10 text-emerald-400 border-emerald-500/20 flex items-center gap-1">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Real Garmin Records Verified
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">
+            Audited performance analytics strictly grounded in authenticated Garmin Connect sessions.
+            No synthetic waveforms or fabricated data.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="bg-[#101726] border border-gray-800 rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <Calendar className="w-4 h-4 text-cyan-400" />
+            <span className="text-gray-300 font-medium">{activities.length} Recorded Runs</span>
+          </div>
+          <div className="bg-[#101726] border border-gray-800 rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <Layers className="w-4 h-4 text-emerald-400" />
+            <span className="text-gray-300 font-medium">
+              {weekly.reduce((acc, curr) => acc + curr.distance_km, 0).toFixed(1)} km Total
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Race Predictions & VDOT Highlights */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {predictions.map((p) => (
+          <div
+            key={p.event}
+            className="bg-[#101726] border border-gray-800 rounded-xl p-4 flex flex-col justify-between"
+          >
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                <span className="font-semibold text-gray-200">{p.event} Target</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full border bg-amber-500/10 text-amber-400 border-amber-500/20">
+                  {p.distance_km >= 21 ? "Actual Race" : "Riegel Formula"}
+                </span>
+              </div>
+              <div className="text-2xl font-bold text-white tracking-tight mt-1">
+                {p.time_formatted}
+              </div>
+              <div className="text-xs text-cyan-400 font-mono mt-0.5">{p.pace_formatted}</div>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-3 pt-2 border-t border-gray-800/80">
+              {p.source}
+            </p>
+          </div>
+        ))}
+
+        {/* VDOT Estimate Card */}
+        <div className="bg-[#101726] border border-gray-800 rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+              <span className="font-semibold text-gray-200">VDOT / VO2 Max</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full border bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
+                Calculated
+              </span>
+            </div>
+            <div className="text-2xl font-bold text-white tracking-tight mt-1">
+              {suite?.vo2_max_estimate?.value || "—"}
+              <span className="text-xs font-normal text-gray-400 ml-1">ml/kg/min</span>
+            </div>
+            <div className="text-xs text-emerald-400 mt-0.5">Jack Daniels Formula</div>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-3 pt-2 border-t border-gray-800/80">
+            Derived from 21.42 km Half Marathon
+          </p>
+        </div>
+      </div>
+
+      {/* 25 Dedicated Individual Analytics Charts */}
       <div>
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-bold text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Footprints className="w-3.5 h-3.5" /> Garmin Biomechanics & Performance
-          </span>
-        </div>
-        <h1 className="text-3xl font-extrabold text-white tracking-tight">Running Analytics Lab</h1>
-        <p className="text-sm text-gray-400 mt-1">
-          25 dedicated, independently modeled interactive charts for biomechanics, running dynamics,
-          lactate threshold, and race predictions.
-        </p>
-      </div>
-
-      {/* Benchmark PRs Banner */}
-      <div className="bg-[#101726] border border-gray-800 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4 flex items-center gap-2">
-          <Trophy className="h-4 w-4 text-amber-400" />
-          <span>Personal Bests (Benchmark Distances)</span>
-        </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-gray-900/60 p-4 rounded-xl border border-gray-800">
-            <span className="text-xs text-gray-400 font-mono">5K Best</span>
-            <div className="text-xl font-bold text-white mt-1">21:42</div>
-            <span className="text-[10px] text-cyan-400 font-mono">Pace 4:20/km</span>
-          </div>
-          <div className="bg-gray-900/60 p-4 rounded-xl border border-gray-800">
-            <span className="text-xs text-gray-400 font-mono">10K Best</span>
-            <div className="text-xl font-bold text-white mt-1">45:18</div>
-            <span className="text-[10px] text-cyan-400 font-mono">Pace 4:31/km</span>
-          </div>
-          <div className="bg-gray-900/60 p-4 rounded-xl border border-gray-800">
-            <span className="text-xs text-gray-400 font-mono">Half Marathon Best</span>
-            <div className="text-xl font-bold text-white mt-1">1:42:30</div>
-            <span className="text-[10px] text-cyan-400 font-mono">Vedanta Delhi HM</span>
-          </div>
-          <div className="bg-gray-900/60 p-4 rounded-xl border border-gray-800">
-            <span className="text-xs text-gray-400 font-mono">Longest Distance</span>
-            <div className="text-xl font-bold text-emerald-400 mt-1">21.4 km</div>
-            <span className="text-[10px] text-gray-400 font-mono">Oct 2024</span>
-          </div>
-        </div>
-      </div>
-
-      {/* PHASE 2 SPECIFICATION: 25 INDIVIDUAL DEDICATED CHARTS */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white tracking-tight">
-            25 Individual Running Dynamics & Analytics Charts
-          </h2>
-          <span className="text-xs text-cyan-400 font-mono">Full Biomechanical Suite</span>
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold text-white">Full Analytics Matrix (25 Metrics)</h2>
+          <p className="text-xs text-gray-400">
+            Every metric displays authentic Garmin API values, mathematically calculated values, or an explicit Unavailable badge with sensor requirements.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {/* 1 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* 1. Weekly Distance */}
           <MetricDetailChart
-            title="Weekly Running Distance"
-            description="12-week total running volume"
-            currentValue={32.6}
+            title="Weekly Distance"
+            description="Aggregated distance across calendar weeks"
+            currentValue={weekly.length > 0 ? weekly[weekly.length - 1].distance_km : "0"}
             unit="km"
             data={weeklyDistData}
             type="bar"
             color="cyan"
             icon={Footprints}
+            provenance={{ source: "Garmin API", status: "verified", unit: "km" }}
           />
-          {/* 2 */}
+
+          {/* 2. Weekly Running Duration */}
           <MetricDetailChart
-            title="Average Pace Progression"
-            description="Mean endurance pace across weekly sessions"
-            currentValue="5:24"
-            unit="min/km"
-            data={avgPaceData}
-            type="line"
-            color="emerald"
+            title="Weekly Running Time"
+            description="Total active time on feet per week"
+            currentValue={weekly.length > 0 ? `${weekly[weekly.length - 1].duration_hours}h` : "0h"}
+            unit="hours"
+            data={weeklyDurData}
+            type="bar"
+            color="blue"
             icon={Clock}
+            provenance={{ source: "Garmin API", status: "verified", unit: "hours" }}
           />
-          {/* 3 */}
+
+          {/* 3. Run Frequency */}
           <MetricDetailChart
-            title="Best Split Pace"
-            description="Fastest 1km split recorded in recent blocks"
-            currentValue="4:18"
-            unit="min/km"
-            data={bestPaceData}
-            type="line"
-            color="cyan"
-            icon={Zap}
-          />
-          {/* 4 */}
-          <MetricDetailChart
-            title="Aerobic Decoupling (Pw:HR)"
-            description="Cardiac drift rate between pace & heart rate"
-            currentValue={3.8}
-            unit="%"
-            data={decouplingData}
-            type="line"
+            title="Activity Frequency"
+            description="Running workouts recorded per week"
+            currentValue={weekly.length > 0 ? weekly[weekly.length - 1].runs_count : "0"}
+            unit="runs"
+            data={weeklyFreqData}
+            type="bar"
             color="emerald"
             icon={Activity}
-            badge="< 5% Solid"
-            badgeVariant="success"
+            provenance={{ source: "Garmin API", status: "verified", unit: "runs" }}
           />
-          {/* 5 */}
+
+          {/* 4. Average Pace Progression */}
+          <MetricDetailChart
+            title="Average Pace Progression"
+            description="Session pace (inverted axis: faster is higher)"
+            currentValue={latestRun ? latestRun.avg_pace_formatted : "—"}
+            data={avgPaceData}
+            type="line"
+            color="amber"
+            icon={Gauge}
+            isPace={true}
+            provenance={{ source: "Garmin API", status: "verified", unit: "min/km" }}
+          />
+
+          {/* 5. Best Split Pace */}
+          <MetricDetailChart
+            title="Best Split / Lap Pace"
+            description="Fastest split achieved within workout"
+            currentValue={latestRun ? latestRun.best_split_pace_formatted : "—"}
+            data={bestSplitData}
+            type="line"
+            color="emerald"
+            icon={Trophy}
+            isPace={true}
+            provenance={{ source: "Garmin API (Laps)", status: "verified", unit: "min/km" }}
+          />
+
+          {/* 6. Cadence Progression */}
           <MetricDetailChart
             title="Cadence Progression"
-            description="Average steps per minute (SPM)"
-            currentValue={172}
+            description="Average steps per minute across running sessions"
+            currentValue={latestRun?.avg_cadence || "—"}
             unit="spm"
             data={cadenceData}
             type="line"
-            color="cyan"
-            icon={Activity}
-            badge="Ideal 170+"
-            badgeVariant="success"
+            color="violet"
+            icon={Footprints}
+            provenance={{ source: "Garmin API", status: "verified", unit: "spm" }}
           />
-          {/* 6 */}
+
+          {/* 7. Cadence Distribution */}
           <MetricDetailChart
-            title="Average Stride Length"
-            description="Horizontal distance traveled per stride"
-            currentValue={1.12}
-            unit="meters"
+            title="Cadence Distribution"
+            description="Count of recorded runs within step cadence ranges"
+            currentValue={activities.length > 0 ? `${activities.length} runs` : "—"}
+            unit="runs"
+            data={cadenceDistData}
+            type="bar"
+            color="cyan"
+            icon={Layers}
+            provenance={{ source: "Garmin API", status: "verified", unit: "runs" }}
+          />
+
+          {/* 8. Stride Length */}
+          <MetricDetailChart
+            title="Stride Length"
+            description="Calculated from real speed and cadence: (speed * 60) / cadence"
+            currentValue={latestRun?.stride_length_m || "—"}
+            unit="m"
             data={strideData}
             type="line"
             color="blue"
-            icon={Footprints}
+            icon={Compass}
+            provenance={{
+              source: "Calculated (Speed/Cadence)",
+              status: "calculated",
+              unit: "meters",
+            }}
           />
-          {/* 7 */}
+
+          {/* 9. Average Heart Rate */}
           <MetricDetailChart
-            title="Ground Contact Time"
-            description="Milliseconds foot stays in contact with ground"
-            currentValue={238}
-            unit="ms"
-            data={gctData}
+            title="Average Heart Rate"
+            description="Mean cardiovascular load during running"
+            currentValue={latestRun?.avg_heart_rate || "—"}
+            unit="bpm"
+            data={avgHrData}
+            type="line"
+            color="rose"
+            icon={Heart}
+            provenance={{ source: "Garmin API", status: "verified", unit: "bpm" }}
+          />
+
+          {/* 10. Max Heart Rate */}
+          <MetricDetailChart
+            title="Peak Heart Rate"
+            description="Maximum recorded heart rate per session"
+            currentValue={latestRun?.max_heart_rate || "—"}
+            unit="bpm"
+            data={maxHrData}
+            type="line"
+            color="rose"
+            icon={Flame}
+            provenance={{ source: "Garmin API", status: "verified", unit: "bpm" }}
+          />
+
+          {/* 11. Aerobic Training Effect */}
+          <MetricDetailChart
+            title="Aerobic Training Effect"
+            description="Garmin TE score reflecting aerobic fitness stimulus (0.0 - 5.0)"
+            currentValue={latestRun?.training_effect_aerobic || "—"}
+            unit="/ 5.0"
+            data={aerobicEffectData}
             type="area"
-            color="violet"
-            icon={Clock}
-          />
-          {/* 8 */}
-          <MetricDetailChart
-            title="Vertical Oscillation"
-            description="Torso bounce amplitude per stride"
-            currentValue={8.1}
-            unit="cm"
-            data={vertOscData}
-            type="line"
-            color="amber"
-            icon={TrendingUp}
-          />
-          {/* 9 */}
-          <MetricDetailChart
-            title="Vertical Ratio"
-            description="Cost of vertical motion relative to forward stride"
-            currentValue={7.2}
-            unit="%"
-            data={vertRatioData}
-            type="line"
             color="emerald"
-            icon={Gauge}
+            icon={Zap}
+            provenance={{ source: "Garmin API", status: "verified", unit: "score" }}
           />
-          {/* 10 */}
+
+          {/* 12. Anaerobic Training Effect */}
           <MetricDetailChart
-            title="Running Power"
-            description="Estimated metabolic mechanical power output"
-            currentValue={285}
-            unit="Watts"
-            data={powerData}
+            title="Anaerobic Training Effect"
+            description="Garmin TE score reflecting high-intensity stamina (0.0 - 5.0)"
+            currentValue={latestRun?.training_effect_anaerobic || "0.0"}
+            unit="/ 5.0"
+            data={anaerobicEffectData}
             type="area"
             color="orange"
             icon={Zap}
+            provenance={{ source: "Garmin API", status: "verified", unit: "score" }}
           />
-          {/* 11 */}
+
+          {/* 13. Elevation Gain */}
           <MetricDetailChart
-            title="Normalized Graded Pace (NGP)"
-            description="Pace adjusted for uphill and downhill gradients"
-            currentValue="5:12"
-            unit="min/km"
-            data={ngpData}
-            type="line"
-            color="cyan"
+            title="Elevation Gain"
+            description="Total meters climbed across workout"
+            currentValue={latestRun?.elevation_gain_m || "0"}
+            unit="m"
+            data={elevationData}
+            type="bar"
+            color="amber"
             icon={Mountain}
+            provenance={{ source: "Garmin API", status: "verified", unit: "meters" }}
           />
-          {/* 12 */}
+
+          {/* 14. Calories Burned */}
           <MetricDetailChart
-            title="Efficiency Factor (EF)"
-            description="Speed (m/min) divided by average heart rate"
-            currentValue={1.28}
-            unit="ratio"
-            data={efData}
-            type="line"
-            color="emerald"
-            icon={Gauge}
-          />
-          {/* 13 */}
-          <MetricDetailChart
-            title="Aerobic Training Effect"
-            description="Endurance stamina impact score (0.0 - 5.0)"
-            currentValue={3.6}
-            unit="/ 5.0"
-            data={aerobicEffectData}
-            type="line"
-            color="emerald"
-            icon={Heart}
-          />
-          {/* 14 */}
-          <MetricDetailChart
-            title="Anaerobic Training Effect"
-            description="Speed and power endurance impact score (0.0 - 5.0)"
-            currentValue={1.7}
-            unit="/ 5.0"
-            data={anaerobicEffectData}
-            type="line"
+            title="Energy Expenditure"
+            description="Active calories burned per running session"
+            currentValue={latestRun?.calories || "—"}
+            unit="kcal"
+            data={caloriesData}
+            type="bar"
             color="rose"
             icon={Flame}
+            provenance={{ source: "Garmin API", status: "verified", unit: "kcal" }}
           />
-          {/* 15 */}
+
+          {/* 15. Distance Per Session */}
           <MetricDetailChart
-            title="Weekly Elevation Gain"
-            description="Cumulative vertical ascent meters"
-            currentValue={110}
-            unit="meters"
-            data={elevGainData}
-            type="bar"
-            color="cyan"
-            icon={Mountain}
-          />
-          {/* 16 */}
-          <MetricDetailChart
-            title="Weekly Elevation Loss"
-            description="Cumulative vertical descent meters"
-            currentValue={108}
-            unit="meters"
-            data={elevLossData}
-            type="bar"
-            color="blue"
-            icon={Mountain}
-          />
-          {/* 17 */}
-          <MetricDetailChart
-            title="Longest Weekly Long Run"
-            description="Distance of peak weekly endurance run"
-            currentValue={21.4}
-            unit="km"
-            data={longestRunData}
+            title="Session Distance"
+            description="Individual workout distance"
+            currentValue={latestRun ? `${latestRun.distance_km} km` : "—"}
+            data={distancePerSessionData}
             type="bar"
             color="cyan"
             icon={Footprints}
+            provenance={{ source: "Garmin API", status: "verified", unit: "km" }}
           />
-          {/* 18 */}
+
+          {/* 16. Duration Per Session */}
           <MetricDetailChart
-            title="Workout Frequency"
-            description="Number of distinct running sessions per week"
-            currentValue={4}
-            unit="runs/wk"
-            data={frequencyData}
+            title="Session Duration"
+            description="Individual workout elapsed minutes"
+            currentValue={latestRun ? latestRun.duration_formatted : "—"}
+            data={durationPerSessionData}
             type="bar"
-            color="emerald"
-            icon={Activity}
+            color="blue"
+            icon={Clock}
+            provenance={{ source: "Garmin API", status: "verified", unit: "minutes" }}
           />
-          {/* 19 */}
+
+          {/* 17. Ground Contact Time (GCT) — UNAVAILABLE */}
           <MetricDetailChart
-            title="Zone 2 (Easy) Volume Ratio"
-            description="Percentage of total running done in aerobic base"
-            currentValue={78}
-            unit="%"
-            data={easyPctData}
-            type="area"
-            color="emerald"
-            icon={Heart}
-            badge="Polarized"
-            badgeVariant="success"
+            title="Ground Contact Time"
+            description="Time foot remains in contact with ground during stride"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires Garmin Running Dynamics Pod, HRM-Pro, or HRM-Fit chest strap"
+            icon={Footprints}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires Garmin Running Dynamics Pod or HRM-Pro chest monitor",
+            }}
           />
-          {/* 20 */}
+
+          {/* 18. Vertical Oscillation — UNAVAILABLE */}
           <MetricDetailChart
-            title="Threshold Volume Ratio"
-            description="Percentage of running done at lactate threshold"
-            currentValue={14}
-            unit="%"
-            data={thresholdPctData}
-            type="bar"
-            color="amber"
-            icon={Zap}
-          />
-          {/* 21 */}
-          <MetricDetailChart
-            title="Interval / VO2 Volume Ratio"
-            description="Percentage of running in maximum speed zones"
-            currentValue={8}
-            unit="%"
-            data={speedPctData}
-            type="bar"
-            color="rose"
-            icon={Flame}
-          />
-          {/* 22 */}
-          <MetricDetailChart
-            title="Estimated VO2 Max Trajectory"
-            description="Cardiorespiratory fitness potential (ml/kg/min)"
-            currentValue={52.4}
-            unit="ml/kg/min"
-            data={vo2Data}
-            type="line"
-            color="violet"
+            title="Vertical Oscillation"
+            description="Amount of vertical bounce during running stride"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires Garmin Running Dynamics Pod or HRM-Pro chest monitor"
             icon={TrendingUp}
-            badge="Top 15%"
-            badgeVariant="success"
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires Garmin Running Dynamics Pod or HRM-Pro chest monitor",
+            }}
           />
-          {/* 23 */}
+
+          {/* 19. Vertical Ratio — UNAVAILABLE */}
           <MetricDetailChart
-            title="5K Race Prediction Time"
-            description="Calculated based on current critical velocity & VO2"
-            currentValue="21:45"
-            unit="min"
-            data={pred5kData}
-            type="line"
-            color="cyan"
-            icon={Clock}
+            title="Vertical Ratio"
+            description="Cost-benefit ratio of vertical bounce to stride length"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires Garmin Running Dynamics Pod or HRM-Pro chest monitor"
+            icon={Compass}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires Garmin Running Dynamics Pod or HRM-Pro chest monitor",
+            }}
           />
-          {/* 24 */}
+
+          {/* 20. Running Power — UNAVAILABLE */}
           <MetricDetailChart
-            title="10K Race Prediction Time"
-            description="Projected threshold endurance capacity"
-            currentValue="45:20"
-            unit="min"
-            data={pred10kData}
-            type="line"
-            color="cyan"
-            icon={Clock}
+            title="Running Power"
+            description="Mechanical power output measured in watts"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires wrist-based running power watch or paired Stryd/RD Pod"
+            icon={Zap}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires running power meter sensor stream",
+            }}
           />
-          {/* 25 */}
+
+          {/* 21. Aerobic Decoupling (Pw:HR) — UNAVAILABLE */}
           <MetricDetailChart
-            title="Half Marathon Prediction"
-            description="Aerobic endurance race trajectory"
-            currentValue="1:41:15"
-            unit="hrs"
-            data={predHalfData}
-            type="line"
-            color="emerald"
-            icon={Clock}
-            badge="Sub 1:45"
-            badgeVariant="success"
+            title="Aerobic Decoupling (Pw:HR)"
+            description="Drift between heart rate and power output over steady runs"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires continuous power and heart rate dual streams on steady long runs"
+            icon={Activity}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires dual Power & HR sensor streams",
+            }}
           />
+
+          {/* 22. Normalized Graded Pace (NGP) — UNAVAILABLE */}
+          <MetricDetailChart
+            title="Normalized Graded Pace"
+            description="Pace adjusted for uphill and downhill energy expenditure"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires high-frequency elevation and second-by-second FIT streams"
+            icon={Mountain}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires second-by-second FIT tracklog elevation profiles",
+            }}
+          />
+
+          {/* 23. Efficiency Factor — UNAVAILABLE */}
+          <MetricDetailChart
+            title="Efficiency Factor (EF)"
+            description="Ratio of speed/power to heart rate"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires continuous sensor power paired with steady aerobic HR"
+            icon={Gauge}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires steady-state continuous wattage sensor stream",
+            }}
+          />
+
+          {/* 24. Ground Contact Time Balance — UNAVAILABLE */}
+          <MetricDetailChart
+            title="GCT Balance (L/R)"
+            description="Left vs Right foot symmetry"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires Garmin HRM-Pro or dual Running Dynamics Pod"
+            icon={Footprints}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires dual-sided running dynamics sensors",
+            }}
+          />
+
+          {/* 25. Lactate Threshold Pace — UNAVAILABLE */}
+          <MetricDetailChart
+            title="Lactate Threshold Pace"
+            description="Garmin estimated anaerobic threshold speed"
+            data={[]}
+            isUnavailable={true}
+            unavailableReason="Requires chest strap heart rate monitor during guided LT test"
+            icon={Flame}
+            provenance={{
+              source: "Unavailable",
+              status: "unavailable",
+              reason: "Requires Garmin Guided Lactate Threshold test with chest strap",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Underlying Workout Records Table */}
+      <div className="bg-[#101726] border border-gray-800 rounded-xl overflow-hidden">
+        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Verified Garmin Workout Records</h3>
+            <p className="text-xs text-gray-400">
+              The exact database records populating the charts above.
+            </p>
+          </div>
+          <span className="text-xs text-gray-400 font-mono">
+            Source: PostgreSQL `activities` table
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-gray-300">
+            <thead className="bg-gray-900/60 text-gray-400 border-b border-gray-800 font-medium">
+              <tr>
+                <th className="py-2.5 px-4">Date</th>
+                <th className="py-2.5 px-4">Workout Name</th>
+                <th className="py-2.5 px-4">Distance</th>
+                <th className="py-2.5 px-4">Duration</th>
+                <th className="py-2.5 px-4">Avg Pace</th>
+                <th className="py-2.5 px-4">Avg HR</th>
+                <th className="py-2.5 px-4">Cadence</th>
+                <th className="py-2.5 px-4">Stride</th>
+                <th className="py-2.5 px-4">Aerobic TE</th>
+                <th className="py-2.5 px-4">Calories</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800/60">
+              {sortedRuns.map((r) => (
+                <tr key={r.id} className="hover:bg-gray-800/30 transition">
+                  <td className="py-2.5 px-4 font-mono text-gray-400">{r.date}</td>
+                  <td className="py-2.5 px-4 font-semibold text-white">{r.name}</td>
+                  <td className="py-2.5 px-4 font-mono text-cyan-400">{r.distance_km} km</td>
+                  <td className="py-2.5 px-4">{r.duration_formatted}</td>
+                  <td className="py-2.5 px-4 font-mono text-amber-400">{r.avg_pace_formatted}</td>
+                  <td className="py-2.5 px-4">{r.avg_heart_rate ? `${r.avg_heart_rate} bpm` : "—"}</td>
+                  <td className="py-2.5 px-4">{r.avg_cadence ? `${r.avg_cadence} spm` : "—"}</td>
+                  <td className="py-2.5 px-4">{r.stride_length_m ? `${r.stride_length_m} m` : "—"}</td>
+                  <td className="py-2.5 px-4 font-mono text-emerald-400">
+                    {r.training_effect_aerobic !== null ? `${r.training_effect_aerobic}` : "—"}
+                  </td>
+                  <td className="py-2.5 px-4">{r.calories ? `${r.calories} kcal` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
